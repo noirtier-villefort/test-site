@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>Моя смена</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">↗</div>
+        <div>
+          <p class="eyebrow">УЧЁТ ВРЕМЕНИ</p>
+          <h1>Моя смена</h1>
+        </div>
+      </div>
+      <span id="statusBadge" class="status-badge" data-status="idle">Не начата</span>
+    </header>
+
+    <section class="earnings-card" aria-labelledby="earningsLabel">
+      <p id="earningsLabel" class="muted">Заработано за смену</p>
+      <div id="earnings" class="earnings-amount" aria-live="polite">0,00 PLN</div>
+      <div class="live-line"><span class="live-dot"></span><span id="liveText">Готов к началу</span></div>
+      <div class="progress-track" aria-label="Прогресс запланированной смены">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+      <div class="progress-caption">
+        <span id="elapsedLabel">0 ч 00 мин оплачено</span>
+        <span id="targetLabel">План: 8 ч</span>
+      </div>
+    </section>
+
+    <section class="stats-grid" aria-label="Параметры смены">
+      <article class="stat-card">
+        <span class="stat-icon" aria-hidden="true">◷</span>
+        <p class="stat-label">Время смены</p>
+        <p id="duration" class="stat-value">00:00:00</p>
+      </article>
+      <article class="stat-card">
+        <span class="stat-icon" aria-hidden="true">↗</span>
+        <p class="stat-label">Ставка в час</p>
+        <p id="rateLabel" class="stat-value">30,00 PLN</p>
+      </article>
+      <article class="stat-card">
+        <span class="stat-icon" aria-hidden="true">◎</span>
+        <p class="stat-label">Прогноз за план</p>
+        <p id="forecast" class="stat-value">240,00 PLN</p>
+      </article>
+      <article class="stat-card">
+        <span class="stat-icon" aria-hidden="true">Ⅱ</span>
+        <p class="stat-label">Перерывы</p>
+        <p id="breakDuration" class="stat-value">00:00:00</p>
+      </article>
+    </section>
+
+    <section class="controls" aria-label="Управление сменой">
+      <button id="startBtn" class="button button-primary" type="button">Начать смену</button>
+      <div id="activeControls" class="button-row" hidden>
+        <button id="pauseBtn" class="button button-secondary" type="button">Пауза</button>
+        <button id="finishBtn" class="button button-danger" type="button">Завершить</button>
+      </div>
+      <button id="resumeBtn" class="button button-primary" type="button" hidden>Продолжить смену</button>
+      <button id="newShiftBtn" class="button button-primary" type="button" hidden>Начать новую смену</button>
+    </section>
+
+    <details class="settings-panel" id="settingsPanel">
+      <summary>
+        <span><span class="summary-icon">⚙</span> Настройки</span>
+        <span class="summary-hint">Ставка, часы, валюта</span>
+      </summary>
+      <form id="settingsForm" class="settings-form">
+        <label class="field">
+          <span>Почасовая ставка</span>
+          <div class="input-with-suffix">
+            <input id="rateInput" name="rate" type="number" min="0.01" max="1000000" step="0.01" value="30" required inputmode="decimal">
+            <span id="currencySuffix">PLN/ч</span>
+          </div>
+        </label>
+        <label class="field">
+          <span>Длительность смены</span>
+          <div class="input-with-suffix">
+            <input id="hoursInput" name="hours" type="number" min="0.25" max="24" step="0.25" value="8" required inputmode="decimal">
+            <span>часов</span>
+          </div>
+        </label>
+        <label class="field">
+          <span>Валюта</span>
+          <select id="currencyInput" name="currency">
+            <option value="PLN">PLN — польский злотый</option>
+            <option value="EUR">EUR — евро</option>
+            <option value="USD">USD — доллар США</option>
+            <option value="GBP">GBP — фунт стерлингов</option>
+            <option value="UAH">UAH — украинская гривна</option>
+            <option value="CZK">CZK — чешская крона</option>
+          </select>
+        </label>
+        <p class="form-note">Новые настройки применяются к будущим сменам. Активная смена сохраняет ставку и валюту, с которыми была начата.</p>
+        <button class="button button-secondary button-full" type="submit">Сохранить настройки</button>
+      </form>
+    </details>
+
+    <section class="history-section">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">ТВОИ РЕЗУЛЬТАТЫ</p>
+          <h2>История смен</h2>
+        </div>
+        <button id="clearHistoryBtn" class="text-button" type="button" hidden>Очистить</button>
+      </div>
+      <div id="historyList" class="history-list">
+        <div class="empty-state">
+          <div class="empty-icon" aria-hidden="true">◷</div>
+          <p>Здесь появятся завершённые смены</p>
+          <span>Начни первую смену, чтобы увидеть историю</span>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer-note">Данные хранятся локально в этом браузере.</footer>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </main>
+</body>
+</html>
