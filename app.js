@@ -32,6 +32,15 @@
     historyList: $("historyList"),
     clearHistoryBtn: $("clearHistoryBtn"),
     addHistoryBtn: $("addHistoryBtn"),
+
+    // dialog elements for adding shift
+    addShiftDialog: $("addShiftDialog"),
+    addShiftForm: $("addShiftForm"),
+    shiftDate: $("shiftDate"),
+    shiftStartTime: $("shiftStartTime"),
+    shiftEndTime: $("shiftEndTime"),
+    cancelAddShift: $("cancelAddShift"),
+
     toast: $("toast")
   };
 
@@ -383,67 +392,64 @@
     const shift = state.activeShift;
     if (!shift) return;
 
-    const confirmed = telegram && typeof telegram.showPopup === "function"
-      ? null
-      : window.confirm("Завершить смену и сохранить результат в истории?");
+  // --- Dialog functions --------------------------------------------------
+  }
 
-    if (confirmed === false) return;
+  function openAddShiftDialog() {
+    const dialog = els.addShiftDialog;
+    if (!dialog) return;
 
-    const finish = () => {
-      const now = Date.now();
-      const paidMs = getElapsedMs(shift, now);
-      const breakMs = Math.max(0, now - shift.startedAt - paidMs);
-      const earnings = shift.rate * paidMs / 3600000;
-      const item = {
-        id: shift.id,
-        startedAt: shift.startedAt,
-        endedAt: now,
-        paidMs,
-        breakMs,
-        rate: shift.rate,
-        shiftHours: shift.shiftHours,
-        currency: shift.currency,
-        earnings
-      };
+    const today = new Date();
+    const isoDate = today.toISOString().slice(0, 10);
+    if (els.shiftDate) els.shiftDate.value = isoDate;
+    if (els.shiftStartTime) els.shiftStartTime.value = "09:00";
+    if (els.shiftEndTime) els.shiftEndTime.value = "17:00";
 
-      state.history.unshift(item);
-      state.history = state.history.slice(0, 100);
-      state.activeShift = null;
-      persist();
-      render();
+    try { if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.removeAttribute("hidden"); } catch (e) { dialog.removeAttribute("hidden"); }
+  }
 
-      const summary = {
-        id: item.id,
-        startedAt: item.startedAt,
-        endedAt: item.endedAt,
-        rate: item.rate,
-        paidMs: item.paidMs,
-        breakMs: item.breakMs,
-        currency: item.currency,
-        earnings: item.earnings,
-        earningsText: money(item.earnings, item.currency),
-        paidText: formatHoursAndMinutes(item.paidMs)
-      };
+  function closeAddShiftDialog() {
+    const dialog = els.addShiftDialog;
+    if (!dialog) return;
+    try { if (typeof dialog.close === "function") dialog.close(); else dialog.setAttribute("hidden", ""); } catch (e) { dialog.setAttribute("hidden", ""); }
+  }
 
-      db.saveShift(item).catch((error) => console.warn("db.saveShift failed:", error));
-      notifyChat(summary);
-      showToast("Смена завершена и добавлена в историю.");
+  function handleAddShiftFormSubmit(e) {
+    e.preventDefault();
+    if (!els.shiftDate || !els.shiftStartTime || !els.shiftEndTime) { showToast("Ошибка формы добавления смены."); return; }
+
+    const date = els.shiftDate.value;
+    const start = els.shiftStartTime.value;
+    const end = els.shiftEndTime.value;
+    if (!date || !start || !end) { showToast("Заполни дату, начало и конец смены."); return; }
+
+    const startTs = new Date(`${date}T${start}:00`);
+    let endTs = new Date(`${date}T${end}:00`);
+    if (endTs <= startTs) endTs = new Date(endTs.getTime() + 24 * 3600 * 1000);
+
+    const paidMs = Math.max(0, endTs - startTs);
+    if (paidMs <= 0) { showToast("Длительность смены должна быть больше нуля."); return; }
+
+    const now = Date.now();
+    const item = {
+      id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+      startedAt: startTs.getTime(),
+      endedAt: endTs.getTime(),
+      paidMs,
+      breakMs: 0,
+      rate: state.settings.rate,
+      shiftHours: +(paidMs / 3600000).toFixed(2),
+      currency: state.settings.currency,
+      earnings: state.settings.rate * paidMs / 3600000
     };
 
-    if (telegram && typeof telegram.showPopup === "function") {
-      telegram.showPopup({
-        title: "Завершить смену?",
-        message: "Результат б��дет сохранён в истории и отправлен в чат.",
-        buttons: [
-          { id: "cancel", type: "cancel", text: "Отмена" },
-          { id: "finish", type: "destructive", text: "Завершить" }
-        ]
-      }, (buttonId) => {
-        if (buttonId === "finish") finish();
-      });
-    } else {
-      finish();
-    }
+    state.history.unshift(item);
+    state.history = state.history.slice(0, 100);
+    persist();
+    render();
+    if (db && typeof db.saveShift === "function") db.saveShift(item).catch((err) => console.warn("db.saveShift failed:", err));
+    showToast("Смена добавлена.");
+    closeAddShiftDialog();
   }
 
   function deleteHistoryItem(id) {
@@ -456,53 +462,6 @@
     render();
     db.deleteHistoryItem(id).catch((error) => console.warn("db.deleteHistoryItem failed:", error));
     showToast("Смена удалена из истории.");
-  }
-
-  function addManualShift() {
-    const hoursText = window.prompt("Длительность смены в часах (например 7.5):", String(state.settings.shiftHours));
-    if (hoursText === null || hoursText.trim() === "") return;
-
-    const hours = Number(hoursText.replace(",", "."));
-    if (!Number.isFinite(hours) || hours <= 0 || hours > 24) {
-      showToast("Некорректная длительность смены.");
-      return;
-    }
-
-    const rateText = window.prompt("Ставка в час:", String(state.settings.rate));
-    if (rateText === null || rateText.trim() === "") return;
-
-    const rate = Number(rateText.replace(",", "."));
-    if (!Number.isFinite(rate) || rate < 0 || rate > 1000000) {
-      showToast("Некорректная ставка.");
-      return;
-    }
-
-    const currencyText = window.prompt("Валюта (PLN, EUR, USD, GBP, UAH, CZK):", state.settings.currency);
-    const currency = ALLOWED_CURRENCIES.includes(currencyText && currencyText.toUpperCase())
-      ? currencyText.toUpperCase()
-      : state.settings.currency;
-
-    const now = Date.now();
-    const paidMs = Math.round(hours * 3600000);
-    const startedAt = now - paidMs;
-    const item = {
-      id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
-      startedAt,
-      endedAt: now,
-      paidMs,
-      breakMs: 0,
-      rate,
-      shiftHours: hours,
-      currency,
-      earnings: rate * paidMs / 3600000
-    };
-
-    state.history.unshift(item);
-    state.history = state.history.slice(0, 100);
-    persist();
-    render();
-    db.saveShift(item).catch((error) => console.warn("db.saveShift failed:", error));
-    showToast("Смена добавлена вручную.");
   }
 
   function saveSettings(event) {
@@ -530,7 +489,7 @@
     persist();
     render();
     els.settingsPanel.open = false;
-    showToast("Настройки сохранены.");
+    showToast("Наст��ойки сохранены.");
   }
 
   function populateSettings() {
@@ -558,9 +517,19 @@
     render();
     showToast("История очищена.");
   });
+
+  // wire dialog handlers
   if (els.addHistoryBtn) {
-    els.addHistoryBtn.addEventListener("click", addManualShift);
+    // remove old prompt-based handler if present (safe no-op)
+    try { els.addHistoryBtn.removeEventListener && els.addHistoryBtn.removeEventListener("click", addManualShift); } catch (e) {}
+    els.addHistoryBtn.addEventListener("click", openAddShiftDialog);
   }
+  if (els.cancelAddShift) els.cancelAddShift.addEventListener("click", closeAddShiftDialog);
+  if (els.addShiftForm) els.addShiftForm.addEventListener("submit", handleAddShiftFormSubmit);
+  if (els.addShiftDialog && typeof els.addShiftDialog.addEventListener === "function") {
+    els.addShiftDialog.addEventListener("cancel", (ev) => { ev.preventDefault(); closeAddShiftDialog(); });
+  }
+
   els.historyList.addEventListener("click", (event) => {
     const button = event.target.closest(".history-delete");
     if (!button || !button.dataset.id) return;
