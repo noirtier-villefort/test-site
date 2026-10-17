@@ -31,16 +31,6 @@
     currencySuffix: $("currencySuffix"),
     historyList: $("historyList"),
     clearHistoryBtn: $("clearHistoryBtn"),
-    addHistoryBtn: $("addHistoryBtn"),
-
-    // dialog elements for adding shift
-    addShiftDialog: $("addShiftDialog"),
-    addShiftForm: $("addShiftForm"),
-    shiftDate: $("shiftDate"),
-    shiftStartTime: $("shiftStartTime"),
-    shiftEndTime: $("shiftEndTime"),
-    cancelAddShift: $("cancelAddShift"),
-
     toast: $("toast")
   };
 
@@ -54,28 +44,8 @@
     } catch (_) {}
   }
 
-  const db = {
-    init() {
-      return Promise.resolve();
-    },
-    saveHistory(history) {
-      console.info("db.saveHistory placeholder:", history.length, "items");
-      return Promise.resolve();
-    },
-    saveShift(shift) {
-      console.info("db.saveShift placeholder:", shift.id);
-      return Promise.resolve();
-    },
-    deleteHistoryItem(id) {
-      console.info("db.deleteHistoryItem placeholder:", id);
-      return Promise.resolve();
-    }
-  };
-
   let toastTimeout;
   let state = loadState();
-
-  db.init();
 
   function loadState() {
     try {
@@ -101,7 +71,6 @@
   function persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      db.saveHistory(state.history).catch((error) => console.warn("db.saveHistory failed:", error));
     } catch (error) {
       console.error("Не удалось сохранить данные:", error);
       showToast("Не удалось сохранить данные. Проверь свободное место в браузере.");
@@ -180,6 +149,14 @@
       day: "numeric", month: "short", year: "numeric",
       hour: "2-digit", minute: "2-digit"
     });
+  }
+
+  function formatSummaryMessage(summary) {
+    const duration = formatHoursAndMinutes(summary.paidMs || 0);
+    const amount = money(summary.earnings || 0, summary.currency || "PLN");
+    const rate = money(summary.rate || 0, summary.currency || "PLN");
+    const breaks = summary.breakMs > 0 ? ` · перерывы ${formatDuration(summary.breakMs)}` : "";
+    return `Смена завершена: ${duration}${breaks}, ${amount} (${rate}/ч)`;
   }
 
   function showToast(message) {
@@ -278,34 +255,18 @@
     history.forEach((item) => {
       const card = document.createElement("article");
       card.className = "history-item";
-
       const details = document.createElement("div");
-      details.className = "history-main";
-
       const date = document.createElement("p");
       date.className = "history-date";
       date.textContent = formatDate(item.startedAt);
-
       const meta = document.createElement("p");
       meta.className = "history-meta";
       meta.textContent = `${formatHoursAndMinutes(item.paidMs)} оплачено · перерывы ${formatDuration(item.breakMs)} · ${money(item.rate, item.currency)}/ч`;
-
       const amount = document.createElement("div");
       amount.className = "history-amount";
       amount.textContent = money(item.earnings, item.currency);
-
-      const actions = document.createElement("div");
-      actions.className = "history-actions-compact";
-
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "text-button history-delete";
-      del.dataset.id = item.id;
-      del.textContent = "Удалить";
-
-      actions.appendChild(del);
       details.append(date, meta);
-      card.append(details, amount, actions);
+      card.append(details, amount);
       els.historyList.append(card);
     });
   }
@@ -354,6 +315,7 @@
   function notifyChat(summary) {
     const payload = {
       type: "shift_completed",
+      message: formatSummaryMessage(summary),
       payload: summary
     };
 
@@ -361,6 +323,7 @@
       if (telegram && typeof telegram.sendData === "function") {
         telegram.sendData(JSON.stringify(payload));
         console.info("Telegram notification sent:", payload);
+        showToast("Уведомление отправлено в чат.");
         return;
       }
     } catch (error) {
@@ -369,14 +332,14 @@
 
     try {
       if (window.Notification && Notification.permission === "granted") {
-        new Notification("Смена завершена", { body: `${summary.earningsText} · ${summary.paidText}` });
+        new Notification("Смена завершена", { body: payload.message });
         return;
       }
 
       if (window.Notification && Notification.permission !== "denied") {
         Notification.requestPermission().then((permission) => {
           if (permission === "granted") {
-            new Notification("Смена завершена", { body: `${summary.earningsText} · ${summary.paidText}` });
+            new Notification("Смена завершена", { body: payload.message });
           }
         });
         return;
@@ -385,83 +348,71 @@
       console.warn("Notification fallback failed:", error);
     }
 
-    showToast(`Смена: ${summary.earningsText} — ${summary.paidText}`);
+    showToast(payload.message);
   }
 
   function finishShift() {
     const shift = state.activeShift;
     if (!shift) return;
+    const confirmed = telegram && typeof telegram.showPopup === "function"
+      ? null
+      : window.confirm("Завершить смену и сохранить результат в истории?");
+    if (confirmed === false) return;
 
-  // --- Dialog functions --------------------------------------------------
-  }
+    const finish = () => {
+      const now = Date.now();
+      const paidMs = getElapsedMs(shift, now);
+      const breakMs = Math.max(0, now - shift.startedAt - paidMs);
+      const earnings = shift.rate * paidMs / 3600000;
+      const item = {
+        id: shift.id,
+        startedAt: shift.startedAt,
+        endedAt: now,
+        paidMs,
+        breakMs,
+        rate: shift.rate,
+        shiftHours: shift.shiftHours,
+        currency: shift.currency,
+        earnings
+      };
 
-  function openAddShiftDialog() {
-    const dialog = els.addShiftDialog;
-    if (!dialog) return;
+      state.history.unshift(item);
+      state.history = state.history.slice(0, 100);
+      state.activeShift = null;
+      persist();
+      render();
 
-    const today = new Date();
-    const isoDate = today.toISOString().slice(0, 10);
-    if (els.shiftDate) els.shiftDate.value = isoDate;
-    if (els.shiftStartTime) els.shiftStartTime.value = "09:00";
-    if (els.shiftEndTime) els.shiftEndTime.value = "17:00";
+      const summary = {
+        id: item.id,
+        startedAt: item.startedAt,
+        endedAt: item.endedAt,
+        rate: item.rate,
+        paidMs: item.paidMs,
+        breakMs: item.breakMs,
+        currency: item.currency,
+        earnings: item.earnings,
+        earningsText: money(item.earnings, item.currency),
+        paidText: formatHoursAndMinutes(item.paidMs)
+      };
 
-    try { if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.removeAttribute("hidden"); } catch (e) { dialog.removeAttribute("hidden"); }
-  }
-
-  function closeAddShiftDialog() {
-    const dialog = els.addShiftDialog;
-    if (!dialog) return;
-    try { if (typeof dialog.close === "function") dialog.close(); else dialog.setAttribute("hidden", ""); } catch (e) { dialog.setAttribute("hidden", ""); }
-  }
-
-  function handleAddShiftFormSubmit(e) {
-    e.preventDefault();
-    if (!els.shiftDate || !els.shiftStartTime || !els.shiftEndTime) { showToast("Ошибка формы добавления смены."); return; }
-
-    const date = els.shiftDate.value;
-    const start = els.shiftStartTime.value;
-    const end = els.shiftEndTime.value;
-    if (!date || !start || !end) { showToast("Заполни дату, начало и конец смены."); return; }
-
-    const startTs = new Date(`${date}T${start}:00`);
-    let endTs = new Date(`${date}T${end}:00`);
-    if (endTs <= startTs) endTs = new Date(endTs.getTime() + 24 * 3600 * 1000);
-
-    const paidMs = Math.max(0, endTs - startTs);
-    if (paidMs <= 0) { showToast("Длительность смены должна быть больше нуля."); return; }
-
-    const now = Date.now();
-    const item = {
-      id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
-      startedAt: startTs.getTime(),
-      endedAt: endTs.getTime(),
-      paidMs,
-      breakMs: 0,
-      rate: state.settings.rate,
-      shiftHours: +(paidMs / 3600000).toFixed(2),
-      currency: state.settings.currency,
-      earnings: state.settings.rate * paidMs / 3600000
+      notifyChat(summary);
+      showToast("Смена завершена и добавлена в историю.");
     };
 
-    state.history.unshift(item);
-    state.history = state.history.slice(0, 100);
-    persist();
-    render();
-    if (db && typeof db.saveShift === "function") db.saveShift(item).catch((err) => console.warn("db.saveShift failed:", err));
-    showToast("Смена добавлена.");
-    closeAddShiftDialog();
-  }
-
-  function deleteHistoryItem(id) {
-    const index = state.history.findIndex((item) => item.id === id);
-    if (index === -1) return;
-    if (!window.confirm("Удалить эту смену из истории? Это действие нельзя отменить.")) return;
-
-    state.history.splice(index, 1);
-    persist();
-    render();
-    db.deleteHistoryItem(id).catch((error) => console.warn("db.deleteHistoryItem failed:", error));
-    showToast("Смена удалена из истории.");
+    if (telegram && typeof telegram.showPopup === "function") {
+      telegram.showPopup({
+        title: "Завершить смену?",
+        message: "Результат будет сохранён в истории и отправлен в чат.",
+        buttons: [
+          { id: "cancel", type: "cancel", text: "Отмена" },
+          { id: "finish", type: "destructive", text: "Завершить" }
+        ]
+      }, (buttonId) => {
+        if (buttonId === "finish") finish();
+      });
+    } else {
+      finish();
+    }
   }
 
   function saveSettings(event) {
@@ -489,7 +440,7 @@
     persist();
     render();
     els.settingsPanel.open = false;
-    showToast("Наст��ойки сохранены.");
+    showToast("Настройки сохранены.");
   }
 
   function populateSettings() {
@@ -516,24 +467,6 @@
     persist();
     render();
     showToast("История очищена.");
-  });
-
-  // wire dialog handlers
-  if (els.addHistoryBtn) {
-    // remove old prompt-based handler if present (safe no-op)
-    try { els.addHistoryBtn.removeEventListener && els.addHistoryBtn.removeEventListener("click", addManualShift); } catch (e) {}
-    els.addHistoryBtn.addEventListener("click", openAddShiftDialog);
-  }
-  if (els.cancelAddShift) els.cancelAddShift.addEventListener("click", closeAddShiftDialog);
-  if (els.addShiftForm) els.addShiftForm.addEventListener("submit", handleAddShiftFormSubmit);
-  if (els.addShiftDialog && typeof els.addShiftDialog.addEventListener === "function") {
-    els.addShiftDialog.addEventListener("cancel", (ev) => { ev.preventDefault(); closeAddShiftDialog(); });
-  }
-
-  els.historyList.addEventListener("click", (event) => {
-    const button = event.target.closest(".history-delete");
-    if (!button || !button.dataset.id) return;
-    deleteHistoryItem(button.dataset.id);
   });
 
   document.addEventListener("visibilitychange", () => {
