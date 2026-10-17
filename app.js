@@ -182,6 +182,14 @@
     });
   }
 
+  function formatSummaryMessage(summary) {
+    const duration = formatHoursAndMinutes(summary.paidMs || 0);
+    const amount = money(summary.earnings || 0, summary.currency || "PLN");
+    const rate = money(summary.rate || 0, summary.currency || "PLN");
+    const breaks = summary.breakMs > 0 ? ` · перерывы ${formatDuration(summary.breakMs)}` : "";
+    return `Смена завершена: ${duration}${breaks}, ${amount} (${rate}/ч)`;
+  }
+
   function showToast(message) {
     els.toast.textContent = message;
     els.toast.hidden = false;
@@ -354,6 +362,7 @@
   function notifyChat(summary) {
     const payload = {
       type: "shift_completed",
+      message: formatSummaryMessage(summary),
       payload: summary
     };
 
@@ -361,6 +370,7 @@
       if (telegram && typeof telegram.sendData === "function") {
         telegram.sendData(JSON.stringify(payload));
         console.info("Telegram notification sent:", payload);
+        showToast("Уведомление отправлено в чат.");
         return;
       }
     } catch (error) {
@@ -369,14 +379,14 @@
 
     try {
       if (window.Notification && Notification.permission === "granted") {
-        new Notification("Смена завершена", { body: `${summary.earningsText} · ${summary.paidText}` });
+        new Notification("Смена завершена", { body: payload.message });
         return;
       }
 
       if (window.Notification && Notification.permission !== "denied") {
         Notification.requestPermission().then((permission) => {
           if (permission === "granted") {
-            new Notification("Смена завершена", { body: `${summary.earningsText} · ${summary.paidText}` });
+            new Notification("Смена завершена", { body: payload.message });
           }
         });
         return;
@@ -385,7 +395,7 @@
       console.warn("Notification fallback failed:", error);
     }
 
-    showToast(`Смена: ${summary.earningsText} — ${summary.paidText}`);
+    showToast(payload.message);
   }
 
   function finishShift() {
@@ -395,23 +405,38 @@
   // --- Dialog functions --------------------------------------------------
   }
 
+  // --- Dialog: открыть/закрыть + обработка формы добавления смены ---
+
   function openAddShiftDialog() {
     const dialog = els.addShiftDialog;
     if (!dialog) return;
 
+    // предзаполнение: сегодняшняя дата и разумное время
     const today = new Date();
     const isoDate = today.toISOString().slice(0, 10);
     if (els.shiftDate) els.shiftDate.value = isoDate;
     if (els.shiftStartTime) els.shiftStartTime.value = "09:00";
     if (els.shiftEndTime) els.shiftEndTime.value = "17:00";
 
-    try { if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.removeAttribute("hidden"); } catch (e) { dialog.removeAttribute("hidden"); }
+    // показать диалог (если есть showModal) или убрать hidden
+    try {
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.removeAttribute("hidden");
+    } catch (e) {
+      // fallback для окружений где <dialog> не поддерживается
+      dialog.removeAttribute("hidden");
+    }
   }
 
   function closeAddShiftDialog() {
     const dialog = els.addShiftDialog;
     if (!dialog) return;
-    try { if (typeof dialog.close === "function") dialog.close(); else dialog.setAttribute("hidden", ""); } catch (e) { dialog.setAttribute("hidden", ""); }
+    try {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.setAttribute("hidden", "");
+    } catch (e) {
+      dialog.setAttribute("hidden", "");
+    }
   }
 
   function handleAddShiftFormSubmit(e) {
@@ -423,12 +448,20 @@
     const end = els.shiftEndTime.value;
     if (!date || !start || !end) { showToast("Заполни дату, начало и конец смены."); return; }
 
+    // строим локальные Date объекты
     const startTs = new Date(`${date}T${start}:00`);
     let endTs = new Date(`${date}T${end}:00`);
-    if (endTs <= startTs) endTs = new Date(endTs.getTime() + 24 * 3600 * 1000);
+
+    // если конец <= началу — считаем, что конец на следующий день
+    if (endTs <= startTs) {
+      endTs = new Date(endTs.getTime() + 24 * 3600 * 1000);
+    }
 
     const paidMs = Math.max(0, endTs - startTs);
-    if (paidMs <= 0) { showToast("Длительность смены должна быть больше нуля."); return; }
+    if (paidMs <= 0) {
+      showToast("Длительность смены должна быть больше нуля.");
+      return;
+    }
 
     const now = Date.now();
     const item = {
@@ -437,7 +470,7 @@
       endedAt: endTs.getTime(),
       paidMs,
       breakMs: 0,
-      rate: state.settings.rate,
+      rate: state.settings.rate, // ставка берётся из настроек
       shiftHours: +(paidMs / 3600000).toFixed(2),
       currency: state.settings.currency,
       earnings: state.settings.rate * paidMs / 3600000
@@ -447,6 +480,7 @@
     state.history = state.history.slice(0, 100);
     persist();
     render();
+    // заглушка бд (если есть) — не мешаем
     if (db && typeof db.saveShift === "function") db.saveShift(item).catch((err) => console.warn("db.saveShift failed:", err));
     showToast("Смена добавлена.");
     closeAddShiftDialog();
@@ -489,7 +523,7 @@
     persist();
     render();
     els.settingsPanel.open = false;
-    showToast("Наст��ойки сохранены.");
+    showToast("Настройки с��хранены.");
   }
 
   function populateSettings() {
