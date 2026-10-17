@@ -282,13 +282,9 @@
       const details = document.createElement("div");
       details.className = "history-main";
 
-      const dateStart = document.createElement("p");
-      dateStart.className = "history-date";
-      dateStart.textContent = formatDate(item.startedAt);
-
-      const dateEnd = document.createElement("p");
-      dateEnd.className = "history-date";
-      dateEnd.textContent = formatDate(item.endedAt);
+      const date = document.createElement("p");
+      date.className = "history-date";
+      date.textContent = formatDate(item.startedAt);
 
       const meta = document.createElement("p");
       meta.className = "history-meta";
@@ -308,7 +304,7 @@
       del.textContent = "Удалить";
 
       actions.appendChild(del);
-      details.append(dateStart, dateEnd, meta);
+      details.append(date, meta);
       card.append(details, amount, actions);
       els.historyList.append(card);
     });
