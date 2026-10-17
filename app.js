@@ -31,6 +31,7 @@
     currencySuffix: $("currencySuffix"),
     historyList: $("historyList"),
     clearHistoryBtn: $("clearHistoryBtn"),
+    addHistoryBtn: $("addHistoryBtn"),
     toast: $("toast")
   };
 
@@ -44,8 +45,28 @@
     } catch (_) {}
   }
 
+  const db = {
+    init() {
+      return Promise.resolve();
+    },
+    saveHistory(history) {
+      console.info("db.saveHistory placeholder:", history.length, "items");
+      return Promise.resolve();
+    },
+    saveShift(shift) {
+      console.info("db.saveShift placeholder:", shift.id);
+      return Promise.resolve();
+    },
+    deleteHistoryItem(id) {
+      console.info("db.deleteHistoryItem placeholder:", id);
+      return Promise.resolve();
+    }
+  };
+
   let toastTimeout;
   let state = loadState();
+
+  db.init();
 
   function loadState() {
     try {
@@ -71,6 +92,7 @@
   function persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      db.saveHistory(state.history).catch((error) => console.warn("db.saveHistory failed:", error));
     } catch (error) {
       console.error("Не удалось сохранить данные:", error);
       showToast("Не удалось сохранить данные. Проверь свободное место в браузере.");
@@ -247,18 +269,34 @@
     history.forEach((item) => {
       const card = document.createElement("article");
       card.className = "history-item";
+
       const details = document.createElement("div");
+      details.className = "history-main";
+
       const date = document.createElement("p");
       date.className = "history-date";
       date.textContent = formatDate(item.startedAt);
+
       const meta = document.createElement("p");
       meta.className = "history-meta";
       meta.textContent = `${formatHoursAndMinutes(item.paidMs)} оплачено · перерывы ${formatDuration(item.breakMs)} · ${money(item.rate, item.currency)}/ч`;
+
       const amount = document.createElement("div");
       amount.className = "history-amount";
       amount.textContent = money(item.earnings, item.currency);
+
+      const actions = document.createElement("div");
+      actions.className = "history-actions-compact";
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "text-button history-delete";
+      del.dataset.id = item.id;
+      del.textContent = "Удалить";
+
+      actions.appendChild(del);
       details.append(date, meta);
-      card.append(details, amount);
+      card.append(details, amount, actions);
       els.historyList.append(card);
     });
   }
@@ -304,19 +342,59 @@
     showToast("Смена продолжается.");
   }
 
+  function notifyChat(summary) {
+    const payload = {
+      type: "shift_completed",
+      payload: summary
+    };
+
+    try {
+      if (telegram && typeof telegram.sendData === "function") {
+        telegram.sendData(JSON.stringify(payload));
+        console.info("Telegram notification sent:", payload);
+        return;
+      }
+    } catch (error) {
+      console.warn("Telegram notification failed:", error);
+    }
+
+    try {
+      if (window.Notification && Notification.permission === "granted") {
+        new Notification("Смена завершена", { body: `${summary.earningsText} · ${summary.paidText}` });
+        return;
+      }
+
+      if (window.Notification && Notification.permission !== "denied") {
+        Notification.requestPermission().then((permission) => {
+          if (permission === "granted") {
+            new Notification("Смена завершена", { body: `${summary.earningsText} · ${summary.paidText}` });
+          }
+        });
+        return;
+      }
+    } catch (error) {
+      console.warn("Notification fallback failed:", error);
+    }
+
+    showToast(`Смена: ${summary.earningsText} — ${summary.paidText}`);
+  }
+
   function finishShift() {
     const shift = state.activeShift;
     if (!shift) return;
+
     const confirmed = telegram && typeof telegram.showPopup === "function"
       ? null
       : window.confirm("Завершить смену и сохранить результат в истории?");
+
     if (confirmed === false) return;
 
     const finish = () => {
       const now = Date.now();
       const paidMs = getElapsedMs(shift, now);
       const breakMs = Math.max(0, now - shift.startedAt - paidMs);
-      state.history.unshift({
+      const earnings = shift.rate * paidMs / 3600000;
+      const item = {
         id: shift.id,
         startedAt: shift.startedAt,
         endedAt: now,
@@ -325,19 +403,37 @@
         rate: shift.rate,
         shiftHours: shift.shiftHours,
         currency: shift.currency,
-        earnings: shift.rate * paidMs / 3600000
-      });
+        earnings
+      };
+
+      state.history.unshift(item);
       state.history = state.history.slice(0, 100);
       state.activeShift = null;
       persist();
       render();
+
+      const summary = {
+        id: item.id,
+        startedAt: item.startedAt,
+        endedAt: item.endedAt,
+        rate: item.rate,
+        paidMs: item.paidMs,
+        breakMs: item.breakMs,
+        currency: item.currency,
+        earnings: item.earnings,
+        earningsText: money(item.earnings, item.currency),
+        paidText: formatHoursAndMinutes(item.paidMs)
+      };
+
+      db.saveShift(item).catch((error) => console.warn("db.saveShift failed:", error));
+      notifyChat(summary);
       showToast("Смена завершена и добавлена в историю.");
     };
 
     if (telegram && typeof telegram.showPopup === "function") {
       telegram.showPopup({
         title: "Завершить смену?",
-        message: "Результат будет сохранён в истории.",
+        message: "Результат б��дет сохранён в истории и отправлен в чат.",
         buttons: [
           { id: "cancel", type: "cancel", text: "Отмена" },
           { id: "finish", type: "destructive", text: "Завершить" }
@@ -348,6 +444,65 @@
     } else {
       finish();
     }
+  }
+
+  function deleteHistoryItem(id) {
+    const index = state.history.findIndex((item) => item.id === id);
+    if (index === -1) return;
+    if (!window.confirm("Удалить эту смену из истории? Это действие нельзя отменить.")) return;
+
+    state.history.splice(index, 1);
+    persist();
+    render();
+    db.deleteHistoryItem(id).catch((error) => console.warn("db.deleteHistoryItem failed:", error));
+    showToast("Смена удалена из истории.");
+  }
+
+  function addManualShift() {
+    const hoursText = window.prompt("Длительность смены в часах (например 7.5):", String(state.settings.shiftHours));
+    if (hoursText === null || hoursText.trim() === "") return;
+
+    const hours = Number(hoursText.replace(",", "."));
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 24) {
+      showToast("Некорректная длительность смены.");
+      return;
+    }
+
+    const rateText = window.prompt("Ставка в час:", String(state.settings.rate));
+    if (rateText === null || rateText.trim() === "") return;
+
+    const rate = Number(rateText.replace(",", "."));
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1000000) {
+      showToast("Некорректная ставка.");
+      return;
+    }
+
+    const currencyText = window.prompt("Валюта (PLN, EUR, USD, GBP, UAH, CZK):", state.settings.currency);
+    const currency = ALLOWED_CURRENCIES.includes(currencyText && currencyText.toUpperCase())
+      ? currencyText.toUpperCase()
+      : state.settings.currency;
+
+    const now = Date.now();
+    const paidMs = Math.round(hours * 3600000);
+    const startedAt = now - paidMs;
+    const item = {
+      id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+      startedAt,
+      endedAt: now,
+      paidMs,
+      breakMs: 0,
+      rate,
+      shiftHours: hours,
+      currency,
+      earnings: rate * paidMs / 3600000
+    };
+
+    state.history.unshift(item);
+    state.history = state.history.slice(0, 100);
+    persist();
+    render();
+    db.saveShift(item).catch((error) => console.warn("db.saveShift failed:", error));
+    showToast("Смена добавлена вручную.");
   }
 
   function saveSettings(event) {
@@ -403,6 +558,14 @@
     render();
     showToast("История очищена.");
   });
+  if (els.addHistoryBtn) {
+    els.addHistoryBtn.addEventListener("click", addManualShift);
+  }
+  els.historyList.addEventListener("click", (event) => {
+    const button = event.target.closest(".history-delete");
+    if (!button || !button.dataset.id) return;
+    deleteHistoryItem(button.dataset.id);
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) render();
@@ -419,4 +582,4 @@
   populateSettings();
   render();
   setInterval(render, 250);
-})(); 
+})();
